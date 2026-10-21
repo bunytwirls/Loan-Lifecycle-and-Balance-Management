@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "title": "Q1",
+      "prompt": {
+        "en": "Explain the invariant that prevents double funding and how you tested it.",
+        "zh-cn": "说明防止重复放款的不变量及其测试方法。"
+      },
+      "answer": "- Invariant: a loan's `pending` to `active` transition, the lender being recorded, and the money transfer all happen together in one critical section, so a loan can be funded at most once.\n- How it's enforced:\n  - `fund` holds the instance lock for the whole check-then-act sequence.\n  - It checks the loan, the lender, `status == 'pending'`, lender ≠ borrower, and the balance, and only then moves money and sets `lender` and `status='active'`.\n  - A second concurrent funder gets the lock later, sees `active`, and receives `409 invalid_state`.\n- Failed calls change nothing: all validation runs before any mutation.\n- Conservation: the principal moves only on that single transition, so the sum of balances is preserved.\n- Tests:\n  - Concurrency test: one pending loan, several funded lenders, and 20-50 threads released together with a `threading.Barrier` through a `ThreadPoolExecutor`. It asserts exactly one success, all the others `invalid_state`, the borrower credited once, and only the winning lender debited. I repeated it many times to shake out races.\n  - Conservation test: the total of all balances is unchanged and no balance is negative.\n  - Sequential failure-path tests: funding an active loan, funding your own loan, insufficient balance, and a missing lender or loan. Each checks that balances and the loan snapshot are identical before and after.\n"
+    },
+    {
+      "id": "q2",
+      "title": "Q2",
+      "prompt": {
+        "en": "How would you move balances and loans into a transactional database shared by several service instances?",
+        "zh-cn": "如何将余额和贷款迁移到多个服务实例共享的事务数据库？"
+      },
+      "answer": "- Why the lock must go: an `RLock` only protects one process, so the database becomes the single source of truth and the service instances become stateless.\n- Schema:\n  - `users(id, balance_cents CHECK (balance_cents >= 0))`.\n  - `loans(id, borrower, lender NULL, principal, outstanding, status)`, with `CHECK` constraints on the amounts and status.\n- Transactions: each public method runs in one transaction.\n- `fund`:\n  - `SELECT ... FOR UPDATE` on the loan row and both user rows.\n  - Lock user rows in a fixed order (for example sorted by ID) to avoid deadlocks between opposite transfers.\n  - Validate in the same order as today, then update both balances and the loan, then commit.\n  - Alternative: an atomic `UPDATE loans SET status='active', lender=? WHERE id=? AND status='pending'`, where zero affected rows maps to `invalid_state`.\n- `repay`: the same pattern, locking the loan plus both users.\n- Balance safety: keep the explicit balance check so the API returns `insufficient_balance`, with the `CHECK` constraint as a last line of defence.\n- Isolation option: serializable isolation with bounded retries on serialization failures.\n- Loan IDs:\n  - A sequence or identity column can leave gaps after rollbacks.\n  - If IDs must stay gap-free, use a counter row updated inside the transaction, at the cost of serializing creations.\n- Snapshots: build the returned dictionaries from the rows, so they stay detached.\n- Testing: run the concurrent-funding test from several processes against a real database.\n"
+    },
+    {
+      "id": "q3",
+      "title": "Q3",
+      "prompt": {
+        "en": "How would repayment idempotency differ from forbidding overpayment?",
+        "zh-cn": "还款幂等性与禁止超额还款有什么区别？"
+      },
+      "answer": "- Forbidding overpayment:\n  - A state-based validation: a payment above `outstanding` is rejected with `invalid_state`.\n  - It keeps the owed balance from going negative.\n  - It looks only at current loan state, not at whether this request was already processed.\n- Idempotency:\n  - It addresses client retries of the same request, such as a timeout followed by a resend.\n  - A retried \"repay 20\" must not pay 20 twice.\n- Why the overpayment rule isn't enough:\n  - A retried 20 against 40 outstanding looks like a valid new payment and would succeed twice.\n  - A retry after the loan is fully repaid returns an error that looks like a fresh rejection, even though the first call succeeded.\n- How to get idempotency:\n  - The client sends a unique idempotency key with each repayment.\n  - The service stores the key, a fingerprint (loan, borrower, amount), and the result in the same transaction as the balance change.\n  - The same key with the same fingerprint returns the stored result without moving money.\n  - The same key with a different payload is rejected as a conflict.\n- How they fit together: idempotency makes retries safe, and the overpayment check protects the invariant when different requests race.\n- API impact: the key is a new parameter, so it would be an optional extension to keep the public signature unchanged."
+    }
+  ]
+}
