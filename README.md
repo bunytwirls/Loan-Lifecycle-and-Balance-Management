@@ -1,6 +1,6 @@
 # Loan Lifecycle & Balance Management
 
-A thread-safe, in-memory loan service (**LedgerBridge**) that tracks user balances and moves loans through `pending → active → repaid`. Built as a **debugging challenge**: the starter service had bugs where loans disappeared after creation, funded balances moved incorrectly, and repayments failed unexpectedly. The job was to repair it without changing its public API.
+A thread-safe, in-memory loan service that tracks user balances and moves loans through `pending → active → repaid`. Built as a **debugging challenge**: the starter service had bugs where loans disappeared after creation, funded balances moved incorrectly, and repayments failed unexpectedly. The job was to repair it without changing its public API.
 
 ![Python](https://img.shields.io/badge/python-3.11-blue)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen)
